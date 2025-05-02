@@ -27,12 +27,7 @@ export class IntroUI {
             We'll save all your adventures, achievements, and best moments.
           </p>
           <p class="auth-explanation">
-            For just $0.99 (one-time payment), you'll get lifetime access to Glenn Explore!
-            <br/>
-            <br/>
             🎮 Join our community and explore the world together!
-            <br/>
-            🌟 All future updates included
             <br/>
             🏆 Your progress saved forever
           </p>

@@ -194,6 +194,24 @@ public class MarketingController : ControllerBase
             return BadRequest("Invalid unsubscribe link");
         }
     }
+
+    [AllowAnonymous]
+    [HttpGet("pixel/{encodedRecipientId}")]
+    public async Task<IActionResult> TrackEmailOpen(string encodedRecipientId)
+    {
+        try
+        {
+            await _marketingService.TrackEmailOpen(encodedRecipientId);
+        }
+        catch (Exception)
+        {
+            // Silently fail to not disrupt email rendering
+        }
+
+        // Return a 1x1 transparent GIF
+        byte[] pixelData = Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
+        return File(pixelData, "image/gif");
+    }
 }
 
 public class CreateCampaignRequest

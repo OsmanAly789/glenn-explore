@@ -96,6 +96,22 @@ export const AddUsersDialog = ({ campaignId, onUsersAdded }: AddUsersDialogProps
     setSelectedUsers(newSelected);
   };
 
+  const toggleSelectAll = () => {
+    if (userList?.items) {
+      if (userList.items.every(user => selectedUsers.has(user.id!))) {
+        // If all are selected, deselect all
+        setSelectedUsers(new Set());
+      } else {
+        // Select all visible users
+        const newSelected = new Set(selectedUsers);
+        userList.items.forEach(user => {
+          if (user.id) newSelected.add(user.id);
+        });
+        setSelectedUsers(newSelected);
+      }
+    }
+  };
+
   const handleAddUsers = () => {
     // Clear page when adding users
     setPage(1);
@@ -253,7 +269,22 @@ export const AddUsersDialog = ({ campaignId, onUsersAdded }: AddUsersDialogProps
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-12"></TableHead>
+                  <TableHead className="w-12">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSelectAll();
+                      }}
+                      className="h-6 w-full"
+                    >
+                      {userList?.items?.length ? 
+                        userList.items.every(user => selectedUsers.has(user.id!)) ? 
+                          "Deselect All" : "Select All"
+                        : "Select All"}
+                    </Button>
+                  </TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Last Seen</TableHead>
                   <TableHead>Subscribed</TableHead>

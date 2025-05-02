@@ -8,6 +8,8 @@ import { ArrowLeft, Send } from 'lucide-react';
 import { usePostApiMarketingRecipientsIdSend } from '@/api/hooks/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { AddUsersDialog } from './AddUsersDialog';
+import { toast } from '@/shared/components/ui/use-toast';
+import { useState } from 'react';
 
 export const CampaignDetail = () => {
   const queryClient = useQueryClient();
@@ -22,6 +24,7 @@ export const CampaignDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { campaigns, isLoading } = useCampaigns();
+  const [sendingProgress, setSendingProgress] = useState<{ total: number; current: number } | null>(null);
   const campaign = campaigns.find((c) => c.id === id);
 
   if (isLoading) {
@@ -32,10 +35,56 @@ export const CampaignDetail = () => {
     return <div>Campaign not found</div>;
   }
 
-  const handleSendCampaign = () => {
-    if (campaign.id) {
-      sendEmail.mutate({ id: campaign.id });
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const handleSendCampaign = async () => {
+    if (!campaign?.recipients) return;
+
+    // Filter recipients that haven't been sent to yet
+    const pendingRecipients = campaign.recipients.filter(r => !r.sentAt);
+    if (pendingRecipients.length === 0) {
+      toast({
+        title: "No pending emails",
+        description: "All emails in this campaign have already been sent.",
+      });
+      return;
     }
+
+    // Ask for confirmation
+    if (!window.confirm(`Send ${pendingRecipients.length} emails with a 500ms delay between each?`)) {
+      return;
+    }
+
+    setSendingProgress({ total: pendingRecipients.length, current: 0 });
+
+    // Send emails sequentially with delay
+    for (let i = 0; i < pendingRecipients.length; i++) {
+      const recipient = pendingRecipients[i];
+      if (recipient?.id) {
+        try {
+          await sendEmail.mutateAsync({ id: recipient.id });
+          setSendingProgress(prev => prev ? { ...prev, current: prev.current + 1 } : null);
+          if (i < pendingRecipients.length - 1) { // Don't wait after the last email
+            await sleep(1500);
+          }
+        } catch (error) {
+          console.error(`Failed to send email to ${recipient.email}:`, error);
+          toast({
+            title: "Error",
+            description: `Failed to send email to ${recipient.email}. Continuing with remaining emails...`,
+            variant: "destructive",
+          });
+          await sleep(1500); // Still wait before next attempt
+        }
+      }
+    }
+
+    setSendingProgress(null);
+    toast({
+      title: "Campaign sent",
+      description: `Finished sending ${pendingRecipients.length} emails.`,
+    });
   };
 
   return (
@@ -58,7 +107,9 @@ export const CampaignDetail = () => {
             disabled={sendEmail.isPending}
           >
             <Send className="h-4 w-4 mr-2" />
-            Send Campaign
+            {sendingProgress 
+              ? `Sending ${sendingProgress.current}/${sendingProgress.total}...`
+              : 'Send Campaign'}
           </Button>
           <AddUsersDialog 
             campaignId={id!} 
@@ -127,8 +178,14 @@ export const CampaignDetail = () => {
                       <div className="flex items-center gap-4">
                         <StatusBadge status={recipient.status} />
                         {recipient.sentAt ? (
-                          <div className="text-sm text-muted-foreground">
-                            Sent {new Date(recipient.sentAt).toLocaleDateString()}
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <div>Sent {new Date(recipient.sentAt).toLocaleDateString()}</div>
+                            {recipient.openedAt && (
+                              <div className="flex items-center gap-1">
+                                <span>•</span>
+                                <span>Opened {new Date(recipient.openedAt).toLocaleDateString()}</span>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <Button

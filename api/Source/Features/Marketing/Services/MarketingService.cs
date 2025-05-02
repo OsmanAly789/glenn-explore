@@ -193,6 +193,26 @@ public class MarketingService
         return $"https://playglenn.com/api/marketing/unsubscribe/{encodedUserId}";
     }
 
+    private string GetTrackingPixelUrl(string recipientId)
+    {
+        var encodedId = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(recipientId));
+        return $"https://playglenn.com/api/marketing/pixel/{encodedId}";
+    }
+
+    public async Task TrackEmailOpen(string encodedRecipientId)
+    {
+        var recipientId = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encodedRecipientId));
+        var recipient = await _context.CampaignRecipients.FindAsync(recipientId)
+            ?? throw new KeyNotFoundException("Recipient not found");
+
+        if (recipient.OpenedAt == null)
+        {
+            recipient.OpenedAt = DateTime.UtcNow;
+            recipient.Status = "opened";
+            await _context.SaveChangesAsync();
+        }
+    }
+
     public async Task UnsubscribeUser(string userId)
     {
         var user = await _context.Users.FindAsync(userId)
@@ -215,9 +235,13 @@ public class MarketingService
             var template = recipient.Campaign?.EmailTemplate
                 ?? throw new InvalidOperationException("Campaign or template not found");
 
-            // Add unsubscribe link to the bottom of the email
+            // Add tracking pixel and unsubscribe link
+            var trackingPixelUrl = GetTrackingPixelUrl(recipient.Id);
             var unsubscribeUrl = GetUnsubscribeUrl(recipient.UserId);
-            var htmlContent = template.HtmlContent + $"\n\n<p style='margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px;'>Don't want to receive these emails? <a href=\"{unsubscribeUrl}\">Unsubscribe here</a></p>";
+        
+            // Add tracking pixel to the email
+            var trackingPixel = $"<img src=\"{trackingPixelUrl}\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\" />";
+            var htmlContent = template.HtmlContent + trackingPixel + $"\n<p style=\"font-size: 12px; color: #666;\">Don't want to receive these emails? <a href=\"{unsubscribeUrl}\">Unsubscribe here</a></p>";
             var textContent = template.TextContent + $"\n\nDon't want to receive these emails? Unsubscribe here: {unsubscribeUrl}";
 
             var result = await _emailService.SendEmailAsync(new EmailSendRequest
