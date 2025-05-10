@@ -14,5 +14,8 @@
     },
     "devDependencies": {
         "dotenv-cli": "^8.0.0"
+    },
+    "dependencies": {
+        "leva": "^0.10.0"
     }
 }

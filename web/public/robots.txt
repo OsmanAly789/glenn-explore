@@ -4,4 +4,6 @@ Disallow: /api/
 Disallow: /admin/
 Disallow: /studio/
 
+Sitemap: https://playglenn.com/sitemap.xml
+
 Sitemap: https://playglenn.com/sitemap.xml 
