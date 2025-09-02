@@ -16,8 +16,15 @@ const viewer = new Cesium.Viewer("cesiumContainer", {
   globe: false, // Using Google 3D Tiles instead
 });
 
-// Enable rendering the sky
+// Enable Cesium's built-in performance display (for debugging)
+// viewer.scene.debugShowFramesPerSecond = true;
+
+// Enable rendering the sky and lighting for 3D Tiles
 viewer.scene.skyAtmosphere.show = true;
+// Note: No globe.enableLighting since we're using 3D Tiles
+viewer.shadows = true;
+viewer.shadowMap.softShadows = true;
+viewer.shadowMap.enabled = true;
 
 // Add Google Photorealistic 3D Tiles for real-world environment
 (async () => {
@@ -32,9 +39,90 @@ viewer.scene.skyAtmosphere.show = true;
 })();
 
 // Racing game initialization
-const GOTHENBURG_LAT = 57.7085;
-const GOTHENBURG_LON = 11.9746;
-const GROUND_HEIGHT = 50; // Will be clamped to 3D Tiles surface automatically
+const GOTHENBURG_LAT = 57.697292;
+const GOTHENBURG_LON = 11.979366;
+const GROUND_HEIGHT = 51.5; // Will be clamped to 3D Tiles surface automatically
+
+// localStorage utilities for position persistence
+function savePositionToStorage() {
+  if (!vehicleState.position) return;
+  
+  try {
+    const cartographic = Cesium.Cartographic.fromCartesian(vehicleState.position);
+    const positionData = {
+      lat: Cesium.Math.toDegrees(cartographic.latitude),
+      lon: Cesium.Math.toDegrees(cartographic.longitude),
+      height: cartographic.height,
+      heading: vehicleState.heading,
+      timestamp: Date.now()
+    };
+    
+    localStorage.setItem('vehiclePosition', JSON.stringify(positionData));
+  } catch (error) {
+    console.warn('Failed to save position to localStorage:', error);
+  }
+}
+
+function loadPositionFromStorage() {
+  try {
+    const stored = localStorage.getItem('vehiclePosition');
+    if (stored) {
+      const positionData = JSON.parse(stored);
+      
+      // Validate the data
+      if (positionData.lat && positionData.lon && 
+          typeof positionData.lat === 'number' && 
+          typeof positionData.lon === 'number' &&
+          typeof positionData.height === 'number' &&
+          typeof positionData.heading === 'number') {
+        return positionData;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load position from localStorage:', error);
+  }
+  
+  // Return defaults if no valid stored data
+  return {
+    lat: GOTHENBURG_LAT,
+    lon: GOTHENBURG_LON,
+    height: GROUND_HEIGHT,
+    heading: 0
+  };
+}
+
+// Performance settings localStorage functions
+function savePerformanceSettings() {
+  try {
+    localStorage.setItem('performanceSettings', JSON.stringify(performanceSettings));
+  } catch (error) {
+    console.warn('Failed to save performance settings to localStorage:', error);
+  }
+}
+
+function loadPerformanceSettings() {
+  try {
+    const stored = localStorage.getItem('performanceSettings');
+    if (stored) {
+      const settings = JSON.parse(stored);
+      
+      // Validate the data structure
+      if (typeof settings === 'object' && settings !== null) {
+        // Merge with defaults to ensure all properties exist
+        Object.assign(performanceSettings, settings);
+        console.log('Loaded performance settings from localStorage:', settings);
+        return true;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load performance settings from localStorage:', error);
+  }
+  
+  return false;
+}
+
+// Time of day state
+let currentTimeOfDay = 'day'; // 'day', 'evening', 'night'
 
 // Vehicle state
 let vehicleState = {
@@ -64,6 +152,26 @@ let mobileInput = {
 // Global flag to disable game controls when typing
 let isTypingInSearch = false;
 
+// FPS tracking variables
+let fpsTracker = {
+  frameCount: 0,
+  lastTime: performance.now(),
+  fps: 0,
+  updateInterval: 500 // Update FPS display every 500ms
+};
+
+// Performance settings state
+let performanceSettings = {
+  skyAtmosphere: true,
+  shadows: false,
+  softShadows: false,
+  fxaa: true,
+  fog: true,
+  buildingDetail: 'HIGH', // HIGH, MEDIUM, LOW
+  targetFPS: 'UNLIMITED', // 30, 60, UNLIMITED
+  resolutionScale: 1.0 // 1.0, 0.75, 0.5
+};
+
 // Camera modes
 const CAMERA_MODES = {
   FIRST_PERSON: 0,
@@ -79,23 +187,26 @@ let cameraState = {
   freeDistance: 100,
   // Debug settings for first person camera
   debug: {
-    eyeHeight: 2.5,
-    forwardOffset: -2,
-    leftOffset: -0.5,
+    eyeHeight: 1.5,
+    forwardOffset: 3,
+    leftOffset: 0,
   }
 };
 
 // Load and spawn vehicle
 async function spawnVehicle() {
   try {
+    // Load position and heading from localStorage or use defaults
+    const savedPosition = loadPositionFromStorage();
+    
     // Create vehicle entity with GLB model
     const vehicleEntity = viewer.entities.add({
       name: 'Player Vehicle',
-      position: Cesium.Cartesian3.fromDegrees(GOTHENBURG_LON, GOTHENBURG_LAT, GROUND_HEIGHT),
+      position: Cesium.Cartesian3.fromDegrees(savedPosition.lon, savedPosition.lat, savedPosition.height),
       // Removed heightReference - we'll handle ground snapping manually
       model: {
-        uri: '/car.glb', // Using the car.glb file from public folder
-        scale: 5.0, // Increased scale to make car more visible
+        uri: '/lambo.glb', // Using the car.glb file from public folder
+        scale: 1.0, // Increased scale to make car more visible
         // Remove minimumPixelSize and maximumScale to prevent auto-scaling
       },
       // Also add a box as fallback visualization
@@ -105,10 +216,10 @@ async function spawnVehicle() {
         outline: true,
         outlineColor: Cesium.Color.WHITE,
       },
-      // Orient the vehicle to face north initially (rotated 180 degrees to face forward)
+      // Orient the vehicle based on saved heading or default orientation
       orientation: Cesium.Transforms.headingPitchRollQuaternion(
-        Cesium.Cartesian3.fromDegrees(GOTHENBURG_LON, GOTHENBURG_LAT, GROUND_HEIGHT),
-        new Cesium.HeadingPitchRoll(Math.PI, 0, 0)
+        Cesium.Cartesian3.fromDegrees(savedPosition.lon, savedPosition.lat, savedPosition.height),
+        new Cesium.HeadingPitchRoll(savedPosition.heading + Math.PI + Cesium.Math.toRadians(-90), 0, 0)
       ),
     });
 
@@ -116,7 +227,7 @@ async function spawnVehicle() {
     // viewer.trackedEntity = vehicleEntity;
 
     // Set initial camera position close to vehicle
-    const vehiclePosition = Cesium.Cartesian3.fromDegrees(GOTHENBURG_LON, GOTHENBURG_LAT, GROUND_HEIGHT);
+    const vehiclePosition = Cesium.Cartesian3.fromDegrees(savedPosition.lon, savedPosition.lat, savedPosition.height);
 
     // Use lookAt to properly position camera
     viewer.camera.lookAt(
@@ -131,9 +242,10 @@ async function spawnVehicle() {
     // Important: unlock camera after initial positioning
     viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
 
-    // Store vehicle reference and initial position
+    // Store vehicle reference and initial position with saved heading
     vehicleState.entity = vehicleEntity;
-    vehicleState.position = Cesium.Cartesian3.fromDegrees(GOTHENBURG_LON, GOTHENBURG_LAT, GROUND_HEIGHT);
+    vehicleState.position = Cesium.Cartesian3.fromDegrees(savedPosition.lon, savedPosition.lat, savedPosition.height);
+    vehicleState.heading = savedPosition.heading;
 
     // Force initial camera update and disable default camera controls
     viewer.scene.screenSpaceCameraController.enableRotate = false;
@@ -154,6 +266,65 @@ async function spawnVehicle() {
     return vehicleEntity;
   } catch (error) {
     console.error('Error spawning vehicle:', error);
+  }
+}
+
+// Time of day lighting functions
+function setTimeOfDay(timeOfDay) {
+  const clock = viewer.clock;
+  const start = Cesium.JulianDate.fromDate(new Date(2024, 5, 21)); // June 21, 2024
+  
+  switch(timeOfDay) {
+    case 'day':
+      // 12:00 PM - Bright daylight
+      clock.currentTime = Cesium.JulianDate.addHours(start, 12, new Cesium.JulianDate());
+      viewer.scene.skyAtmosphere.hueShift = 0.0;
+      viewer.scene.skyAtmosphere.saturationShift = 0.0;
+      viewer.scene.skyAtmosphere.brightnessShift = 0.0;
+      break;
+      
+    case 'evening':
+      // 6:00 PM - Golden hour
+      clock.currentTime = Cesium.JulianDate.addHours(start, 18, new Cesium.JulianDate());
+      viewer.scene.skyAtmosphere.hueShift = 0.1; // More orange
+      viewer.scene.skyAtmosphere.saturationShift = 0.3; // More saturated
+      viewer.scene.skyAtmosphere.brightnessShift = -0.1; // Slightly darker
+      break;
+      
+    case 'night':
+      // 11:00 PM - Night time
+      clock.currentTime = Cesium.JulianDate.addHours(start, 23, new Cesium.JulianDate());
+      viewer.scene.skyAtmosphere.hueShift = -0.2; // Blue shift
+      viewer.scene.skyAtmosphere.saturationShift = -0.3; // Less saturated
+      viewer.scene.skyAtmosphere.brightnessShift = -0.7; // Much darker
+      break;
+  }
+  
+  // Update global state
+  currentTimeOfDay = timeOfDay;
+  updateTimeButton();
+}
+
+function updateTimeButton() {
+  const timeStates = {
+    'day': '☀️ Day',
+    'evening': '🌅 Evening', 
+    'night': '🌙 Night'
+  };
+  
+  // Check if timeButton exists before trying to use it
+  const timeButtonElement = document.querySelector('#timeButton') || (typeof timeButton !== 'undefined' ? timeButton : null);
+  
+  if (timeButtonElement) {
+    timeButtonElement.innerHTML = timeStates[currentTimeOfDay];
+    
+    // Visual feedback on state change
+    timeButtonElement.style.background = 'rgba(255, 255, 255, 0.15)';
+    timeButtonElement.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+    setTimeout(() => {
+      timeButtonElement.style.background = 'rgba(255, 255, 255, 0.08)';
+      timeButtonElement.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+    }, 300);
   }
 }
 
@@ -190,6 +361,7 @@ debugPanel.id = 'debugPanel';
     debugPanel.innerHTML = `
       <div style="font-weight: 600; margin-bottom: 12px; color: rgba(255, 255, 255, 0.95); font-size: 14px;">🚗 Debug Panel</div>
       <div style="margin-bottom: 6px; opacity: 0.8;">Vehicle: ${vehicle ? '✅ Loaded' : '❌ Failed'}</div>
+      <div id="fpsDisplay" style="margin-bottom: 4px; opacity: 0.9; color: #00ff88;">FPS: 0</div>
       <div id="speedDisplay" style="margin-bottom: 4px; opacity: 0.9;">Speed: 0 km/h</div>
       <div id="headingDisplay" style="margin-bottom: 4px; opacity: 0.9;">Heading: 0°</div>
       <div id="positionDisplay" style="margin-bottom: 12px; opacity: 0.8; font-size: 11px;">Position: ${GOTHENBURG_LAT.toFixed(4)}, ${GOTHENBURG_LON.toFixed(4)}</div>
@@ -210,16 +382,66 @@ debugPanel.id = 'debugPanel';
       ">
         🎯 Zoom to Vehicle
       </button>
+      <button id="toggleBuiltInFPS" style="
+        margin-bottom: 8px; 
+        padding: 8px 12px; 
+        background: rgba(255, 255, 255, 0.1); 
+        color: rgba(255, 255, 255, 0.9); 
+        border: 1px solid rgba(255, 255, 255, 0.15); 
+        border-radius: 6px; 
+        cursor: pointer; 
+        font-size: 11px; 
+        font-weight: 500;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        transition: all 0.2s;
+        backdrop-filter: blur(10px);
+        width: 100%;
+      ">
+        📊 Toggle Cesium FPS
+      </button>
       <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px;">
         <div style="font-weight: 600; margin-bottom: 6px; opacity: 0.9;">Controls:</div>
         <div style="opacity: 0.7; margin-bottom: 4px;">WASD - Drive</div>
         <div style="opacity: 0.7; margin-bottom: 6px;">C - Switch Camera</div>
         <div id="cameraMode" style="margin-top: 8px; color: rgba(255, 255, 255, 0.9); font-weight: 500; padding: 4px 8px; background: rgba(255, 255, 255, 0.05); border-radius: 4px; font-size: 11px;">📹 Camera: Chase</div>
+        <div id="mobileInputDebug" style="margin-top: 8px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+          <div style="color: rgba(255, 255, 255, 0.8); font-weight: 500; margin-bottom: 6px; font-size: 10px;">Mobile Input:</div>
+          <div id="mobileGasDisplay" style="font-size: 10px; opacity: 0.7; margin-bottom: 2px;">Gas: false</div>
+          <div id="mobileBrakeDisplay" style="font-size: 10px; opacity: 0.7; margin-bottom: 2px;">Brake: false</div>
+          <div id="mobileSteeringDisplay" style="font-size: 10px; opacity: 0.7;">Steering: 0</div>
+        </div>
         <div id="cameraDebugControls" style="margin-top: 8px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; display: none;">
           <div style="color: rgba(255, 255, 255, 0.8); font-weight: 500; margin-bottom: 6px; font-size: 10px;">Camera Debug:</div>
           <div id="eyeHeightDisplay" style="font-size: 10px; opacity: 0.7; margin-bottom: 2px;">Eye Height: 2.5m</div>
           <div id="forwardOffsetDisplay" style="font-size: 10px; opacity: 0.7; margin-bottom: 2px;">Forward: -2.0m</div>
           <div id="leftOffsetDisplay" style="font-size: 10px; opacity: 0.7;">Left: -0.5m</div>
+        </div>
+        <div id="performanceControls" style="margin-top: 12px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+          <div style="color: rgba(255, 255, 255, 0.8); font-weight: 500; margin-bottom: 8px; font-size: 10px;">🎮 Performance Controls:</div>
+          
+          <!-- Performance Preset Buttons -->
+          <div style="display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap;">
+            <button id="presetUltra" class="preset-btn" style="font-size: 9px; padding: 4px 6px;">Ultra</button>
+            <button id="presetBalanced" class="preset-btn" style="font-size: 9px; padding: 4px 6px;">Balanced</button>
+            <button id="presetPerformance" class="preset-btn" style="font-size: 9px; padding: 4px 6px;">Fast</button>
+            <button id="presetPotato" class="preset-btn" style="font-size: 9px; padding: 4px 6px;">Potato</button>
+          </div>
+          
+          <!-- Individual Performance Toggles -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 9px;">
+            <button id="toggleSkyAtmosphere" class="perf-toggle">🌅 Sky</button>
+            <button id="toggleShadows" class="perf-toggle">🌄 Shadows</button>
+            <button id="toggleSoftShadows" class="perf-toggle">✨ Soft</button>
+            <button id="toggleFXAA" class="perf-toggle">🎯 FXAA</button>
+            <button id="toggleFog" class="perf-toggle">🌫️ Fog</button>
+            <button id="toggleBuildingDetail" class="perf-toggle">🏢 Detail</button>
+          </div>
+          
+          <!-- Resolution and FPS Controls -->
+          <div style="margin-top: 6px; display: flex; gap: 4px;">
+            <button id="toggleResolution" class="perf-toggle" style="font-size: 9px; flex: 1;">📐 100%</button>
+            <button id="toggleTargetFPS" class="perf-toggle" style="font-size: 9px; flex: 1;">🎬 ∞ FPS</button>
+          </div>
         </div>
       </div>
     `;
@@ -288,6 +510,28 @@ document.body.appendChild(debugPanel);
       z-index: 1002;
     `;
 
+    // Create single cycling time button
+    const timeButton = document.createElement('button');
+    timeButton.id = 'timeButton';
+    timeButton.innerHTML = '☀️ Day';
+    timeButton.style.cssText = `
+      padding: 10px 16px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 12px;
+      font-weight: 500;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      cursor: pointer;
+      border-radius: 8px;
+      backdrop-filter: blur(20px) saturate(180%);
+      transition: all 0.3s cubic-bezier(0.2, 0, 0, 1);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    `;
+
     // Teleport button (formerly search)
     const searchToggle = document.createElement('button');
     searchToggle.innerHTML = '📍 Teleport';
@@ -330,6 +574,7 @@ document.body.appendChild(debugPanel);
       gap: 6px;
     `;
 
+    topRightControls.appendChild(timeButton);
     topRightControls.appendChild(cameraButton);
     topRightControls.appendChild(searchToggle);
     document.body.appendChild(topRightControls);
@@ -509,10 +754,10 @@ document.body.appendChild(debugPanel);
         vehicleState.velocity = 0;
         vehicleState.heading = 0;
         
-        // Update entity orientation (add 180 degrees for proper forward direction)
+        // Update entity orientation (add 180 degrees + 45 degrees for proper forward direction)
         const orientation = Cesium.Transforms.headingPitchRollQuaternion(
           vehicleState.position, 
-          new Cesium.HeadingPitchRoll(Math.PI, 0, 0)
+          new Cesium.HeadingPitchRoll(Math.PI + Cesium.Math.toRadians(-90), 0, 0)
         );
         vehicleState.entity.orientation = orientation;
         
@@ -872,6 +1117,62 @@ document.body.appendChild(debugPanel);
         display: block !important;
       }
       
+      /* Ensure touch events work properly */
+      #gasButton, #brakeButton {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+      }
+      
+      /* Improve touch target sizes for mobile */
+      @media (max-width: 768px) {
+        #gasButton, #brakeButton {
+          width: 100px !important;
+          height: 100px !important;
+          font-size: 14px !important;
+        }
+        
+        #steeringArea {
+          min-height: 100px;
+          min-width: 280px;
+        }
+      }
+      
+      /* Performance control button styles */
+      .perf-toggle, .preset-btn {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.8);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        padding: 6px 8px;
+        font-size: 9px;
+        font-weight: 500;
+      }
+      
+      .perf-toggle:hover, .preset-btn:hover {
+        background: rgba(255, 255, 255, 0.15);
+        border-color: rgba(255, 255, 255, 0.3);
+        transform: scale(1.02);
+      }
+      
+      .perf-toggle.active {
+        background: rgba(0, 255, 136, 0.2);
+        border-color: rgba(0, 255, 136, 0.4);
+        color: rgba(255, 255, 255, 0.95);
+      }
+      
+      .preset-btn.active {
+        background: rgba(59, 130, 246, 0.3);
+        border-color: rgba(59, 130, 246, 0.5);
+        color: rgba(255, 255, 255, 0.95);
+      }
+      
       #steeringSlider::-webkit-slider-thumb {
         -webkit-appearance: none;
         appearance: none;
@@ -903,6 +1204,25 @@ document.body.appendChild(debugPanel);
     document.body.appendChild(mobileControls);
 
         // Add sophisticated interactions for UI buttons
+    
+    // Cycling time of day button
+    function cycleTimeOfDay() {
+      const timeStates = ['day', 'evening', 'night'];
+      const currentIndex = timeStates.indexOf(currentTimeOfDay);
+      const nextIndex = (currentIndex + 1) % timeStates.length;
+      setTimeOfDay(timeStates[nextIndex]);
+    }
+
+    timeButton.addEventListener('click', () => {
+      cycleTimeOfDay();
+      timeButton.style.transform = 'scale(0.95)';
+      setTimeout(() => {
+        timeButton.style.transform = 'scale(1)';
+      }, 150);
+    });
+
+    // Initialize to day mode now that timeButton is created
+    setTimeOfDay('day');
     
     // Enhanced teleport button interactions
     searchToggle.addEventListener('click', () => {
@@ -937,7 +1257,7 @@ document.body.appendChild(debugPanel);
     });
 
     // Add hover effects for all buttons
-    [debugToggle, searchToggle, cameraButton].forEach(button => {
+    [debugToggle, searchToggle, cameraButton, timeButton].forEach(button => {
       button.addEventListener('mouseenter', () => {
         button.style.background = 'rgba(255, 255, 255, 0.12)';
         button.style.borderColor = 'rgba(255, 255, 255, 0.2)';
@@ -952,6 +1272,9 @@ document.body.appendChild(debugPanel);
         button.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)';
       });
     });
+
+    // Initialize lighting to day mode now that buttons are created
+    // setTimeOfDay('day'); // Moved to after UI creation
 
     // Mobile control handlers
     const gasButton = document.getElementById('gasButton');
@@ -970,9 +1293,10 @@ document.body.appendChild(debugPanel);
           gasTouchId = e.touches[0].identifier;
           mobileInput.gas = true;
           gasButton.style.transform = 'scale(0.95)';
-
+          gasButton.style.background = 'rgba(255, 255, 255, 0.2)';
+          console.log('Gas button touched - mobile input set to true');
         }
-      });
+      }, { passive: false });
       
       gasButton.addEventListener('touchend', (e) => {
         e.preventDefault();
@@ -991,10 +1315,12 @@ document.body.appendChild(debugPanel);
           if (gasTouchEnded) {
             mobileInput.gas = false;
             gasButton.style.transform = 'scale(1)';
+            gasButton.style.background = 'rgba(255, 255, 255, 0.1)';
             gasTouchId = null;
+            console.log('Gas button released - mobile input set to false');
           }
         }
-      });
+      }, { passive: false });
       
       // Also handle mouse events for testing on desktop
       gasButton.addEventListener('mousedown', (e) => {
@@ -1028,8 +1354,10 @@ document.body.appendChild(debugPanel);
           brakeTouchId = e.touches[0].identifier;
           mobileInput.brake = true;
           brakeButton.style.transform = 'scale(0.95)';
+          brakeButton.style.background = 'rgba(255, 255, 255, 0.15)';
+          console.log('Brake button touched - mobile input set to true');
         }
-      });
+      }, { passive: false });
       
       brakeButton.addEventListener('touchend', (e) => {
         e.preventDefault();
@@ -1047,10 +1375,12 @@ document.body.appendChild(debugPanel);
           if (brakeTouchEnded) {
             mobileInput.brake = false;
             brakeButton.style.transform = 'scale(1)';
+            brakeButton.style.background = 'rgba(255, 255, 255, 0.08)';
             brakeTouchId = null;
+            console.log('Brake button released - mobile input set to false');
           }
         }
-      });
+      }, { passive: false });
       
       // Mouse events for desktop testing
       brakeButton.addEventListener('mousedown', (e) => {
@@ -1126,10 +1456,11 @@ document.body.appendChild(debugPanel);
             isSteeringActive = true;
             steeringTouchId = touch.identifier;
             updateSteering(touch.clientX, touch.clientY);
+            console.log('Steering touch started:', touch.identifier);
             break;
           }
         }
-      });
+      }, { passive: false });
       
       steeringArea.addEventListener('touchmove', (e) => {
         e.preventDefault();
@@ -1145,13 +1476,14 @@ document.body.appendChild(debugPanel);
             }
           }
         }
-      });
+      }, { passive: false });
       
       function resetSteering() {
         mobileInput.steering = 0;
         steeringIndicator.style.left = '50%';
         steeringIndicator.style.background = '#4CAF50';
         steeringTouchId = null;
+        console.log('Steering reset');
       }
       
       steeringArea.addEventListener('touchend', (e) => {
@@ -1224,6 +1556,51 @@ document.body.appendChild(debugPanel);
           viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
         }
       });
+    }
+    
+    // Add Cesium built-in FPS toggle handler
+    const toggleBuiltInFPSButton = document.getElementById('toggleBuiltInFPS');
+    if (toggleBuiltInFPSButton) {
+      toggleBuiltInFPSButton.addEventListener('click', () => {
+        viewer.scene.debugShowFramesPerSecond = !viewer.scene.debugShowFramesPerSecond;
+        toggleBuiltInFPSButton.style.background = viewer.scene.debugShowFramesPerSecond 
+          ? 'rgba(0, 255, 136, 0.2)' 
+          : 'rgba(255, 255, 255, 0.1)';
+        toggleBuiltInFPSButton.textContent = viewer.scene.debugShowFramesPerSecond 
+          ? '📊 Hide Cesium FPS' 
+          : '📊 Show Cesium FPS';
+      });
+    }
+    
+    // Add performance control event listeners
+    const setupPerformanceControls = () => {
+      // Individual toggles
+      document.getElementById('toggleSkyAtmosphere')?.addEventListener('click', toggleSkyAtmosphere);
+      document.getElementById('toggleShadows')?.addEventListener('click', toggleShadows);
+      document.getElementById('toggleSoftShadows')?.addEventListener('click', toggleSoftShadows);
+      document.getElementById('toggleFXAA')?.addEventListener('click', toggleFXAA);
+      document.getElementById('toggleFog')?.addEventListener('click', toggleFog);
+      document.getElementById('toggleBuildingDetail')?.addEventListener('click', toggleBuildingDetail);
+      document.getElementById('toggleResolution')?.addEventListener('click', toggleResolution);
+      document.getElementById('toggleTargetFPS')?.addEventListener('click', toggleTargetFPS);
+      
+      // Preset buttons
+      document.getElementById('presetUltra')?.addEventListener('click', () => applyPerformancePreset('ultra'));
+      document.getElementById('presetBalanced')?.addEventListener('click', () => applyPerformancePreset('balanced'));
+      document.getElementById('presetPerformance')?.addEventListener('click', () => applyPerformancePreset('performance'));
+      document.getElementById('presetPotato')?.addEventListener('click', () => applyPerformancePreset('potato'));
+      
+      // Initialize UI state
+      updatePerformanceUI();
+    };
+    
+    setupPerformanceControls();
+    
+    // Load and apply saved performance settings
+    if (loadPerformanceSettings()) {
+      applyPerformancePreset('custom'); // Apply loaded settings
+    } else {
+      applyPerformancePreset('balanced'); // Apply default ultra settings
     }
     
     // Add height test button handler
@@ -1446,10 +1823,10 @@ async function updateVehicleMovement(deltaTime) {
     vehicleState.entity.position = vehicleState.position;
   }
 
-  // Update entity orientation to face movement direction (add 180 degrees to fix forward direction)
+  // Update entity orientation to face movement direction (add 180 degrees + 45 degrees for proper direction)
   const orientation = Cesium.Transforms.headingPitchRollQuaternion(
     vehicleState.position,
-    new Cesium.HeadingPitchRoll(vehicleState.heading + Math.PI, 0, 0)
+    new Cesium.HeadingPitchRoll(vehicleState.heading + Math.PI + Cesium.Math.toRadians(-90), 0, 0)
   );
   vehicleState.entity.orientation = orientation;
 
@@ -1515,7 +1892,7 @@ function updateFirstPersonCamera() {
 
 // Chase camera (behind the vehicle, zoomed out)
 function updateChaseCamera() {
-  const cameraDistance = 80; // meters behind (more zoomed out)
+  const cameraDistance = 100; // meters behind (more zoomed out)
   const cameraHeight = 30; // meters above
 
   // Use lookAt for smooth following
@@ -1523,7 +1900,7 @@ function updateChaseCamera() {
     vehicleState.position,
     new Cesium.HeadingPitchRange(
       vehicleState.heading + Math.PI, // Look from behind
-      Cesium.Math.toRadians(-25), // Look down slightly more
+      Cesium.Math.toRadians(-15), // Look down slightly more
       cameraDistance
     )
   );
@@ -1595,6 +1972,301 @@ function switchCameraMode() {
   
 }
 
+// FPS tracking function
+function updateFPS() {
+  const currentTime = performance.now();
+  fpsTracker.frameCount++;
+  
+  // Update FPS display every interval
+  if (currentTime - fpsTracker.lastTime >= fpsTracker.updateInterval) {
+    fpsTracker.fps = Math.round((fpsTracker.frameCount * 1000) / (currentTime - fpsTracker.lastTime));
+    fpsTracker.frameCount = 0;
+    fpsTracker.lastTime = currentTime;
+    
+    // Update FPS display
+    const fpsDisplay = document.getElementById('fpsDisplay');
+    if (fpsDisplay) {
+      fpsDisplay.textContent = `FPS: ${fpsTracker.fps}`;
+      
+      // Color-code FPS for easy reading
+      if (fpsTracker.fps >= 60) {
+        fpsDisplay.style.color = '#00ff88'; // Green for good FPS
+      } else if (fpsTracker.fps >= 30) {
+        fpsDisplay.style.color = '#ffaa00'; // Orange for medium FPS
+      } else {
+        fpsDisplay.style.color = '#ff4444'; // Red for low FPS
+      }
+    }
+  }
+}
+
+// Performance toggle functions
+function toggleSkyAtmosphere() {
+  performanceSettings.skyAtmosphere = !performanceSettings.skyAtmosphere;
+  viewer.scene.skyAtmosphere.show = performanceSettings.skyAtmosphere;
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Sky Atmosphere:', performanceSettings.skyAtmosphere);
+}
+
+function toggleShadows() {
+  performanceSettings.shadows = !performanceSettings.shadows;
+  viewer.shadows = performanceSettings.shadows;
+  viewer.shadowMap.enabled = performanceSettings.shadows;
+  if (!performanceSettings.shadows) {
+    performanceSettings.softShadows = false;
+    viewer.shadowMap.softShadows = false;
+  }
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Shadows:', performanceSettings.shadows);
+}
+
+function toggleSoftShadows() {
+  if (!performanceSettings.shadows) {
+    // Can't enable soft shadows without basic shadows
+    return;
+  }
+  performanceSettings.softShadows = !performanceSettings.softShadows;
+  viewer.shadowMap.softShadows = performanceSettings.softShadows;
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Soft Shadows:', performanceSettings.softShadows);
+}
+
+function toggleFXAA() {
+  performanceSettings.fxaa = !performanceSettings.fxaa;
+  if (viewer.scene.postProcessStages.fxaa) {
+    viewer.scene.postProcessStages.fxaa.enabled = performanceSettings.fxaa;
+  }
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('FXAA:', performanceSettings.fxaa);
+}
+
+function toggleFog() {
+  performanceSettings.fog = !performanceSettings.fog;
+  viewer.scene.fog.enabled = performanceSettings.fog;
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Fog:', performanceSettings.fog);
+}
+
+function toggleBuildingDetail() {
+  const levels = ['HIGH', 'MEDIUM', 'LOW'];
+  const currentIndex = levels.indexOf(performanceSettings.buildingDetail);
+  const nextIndex = (currentIndex + 1) % levels.length;
+  performanceSettings.buildingDetail = levels[nextIndex];
+  
+  // Adjust tileset quality if available
+  viewer.scene.primitives._primitives.forEach(primitive => {
+    if (primitive.isCesium3DTileset) {
+      switch(performanceSettings.buildingDetail) {
+        case 'HIGH':
+          primitive.maximumScreenSpaceError = 1;
+          break;
+        case 'MEDIUM':
+          primitive.maximumScreenSpaceError = 4;
+          break;
+        case 'LOW':
+          primitive.maximumScreenSpaceError = 16;
+          break;
+      }
+    }
+  });
+  
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Building Detail:', performanceSettings.buildingDetail);
+}
+
+function toggleResolution() {
+  const scales = [1.0, 0.75, 0.5];
+  const currentIndex = scales.indexOf(performanceSettings.resolutionScale);
+  const nextIndex = (currentIndex + 1) % scales.length;
+  performanceSettings.resolutionScale = scales[nextIndex];
+  
+  viewer.resolutionScale = performanceSettings.resolutionScale;
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Resolution Scale:', performanceSettings.resolutionScale);
+}
+
+function toggleTargetFPS() {
+  const fpsTargets = ['UNLIMITED', '60', '30'];
+  const currentIndex = fpsTargets.indexOf(performanceSettings.targetFPS);
+  const nextIndex = (currentIndex + 1) % fpsTargets.length;
+  performanceSettings.targetFPS = fpsTargets[nextIndex];
+  
+  switch(performanceSettings.targetFPS) {
+    case 'UNLIMITED':
+      viewer.targetFrameRate = undefined;
+      break;
+    case '60':
+      viewer.targetFrameRate = 60;
+      break;
+    case '30':
+      viewer.targetFrameRate = 30;
+      break;
+  }
+  
+  updatePerformanceUI();
+  savePerformanceSettings();
+  console.log('Target FPS:', performanceSettings.targetFPS);
+}
+
+// Performance preset functions
+function applyPerformancePreset(preset) {
+  const presets = {
+    ultra: {
+      skyAtmosphere: true,
+      shadows: false,
+      softShadows: false,
+      fxaa: true,
+      fog: true,
+      buildingDetail: 'HIGH',
+      targetFPS: 'UNLIMITED',
+      resolutionScale: 1.0
+    },
+    balanced: {
+      skyAtmosphere: true,
+      shadows: false,
+      softShadows: false,
+      fxaa: true,
+      fog: true,
+      buildingDetail: 'MEDIUM',
+      targetFPS: '60',
+      resolutionScale: 1.0
+    },
+    performance: {
+      skyAtmosphere: false,
+      shadows: false,
+      softShadows: false,
+      fxaa: false,
+      fog: false,
+      buildingDetail: 'LOW',
+      targetFPS: '60',
+      resolutionScale: 0.75
+    },
+    potato: {
+      skyAtmosphere: false,
+      shadows: false,
+      softShadows: false,
+      fxaa: false,
+      fog: false,
+      buildingDetail: 'LOW',
+      targetFPS: '30',
+      resolutionScale: 0.5
+    }
+  };
+  
+  const settings = presets[preset];
+  if (!settings && preset !== 'custom') return;
+  
+  // For 'custom', use current performanceSettings
+  if (preset === 'custom') {
+    // Use current settings without modification
+  } else {
+    // Apply all settings from preset
+    Object.assign(performanceSettings, settings);
+  }
+  
+  // Use current performanceSettings for applying to Cesium
+  const currentSettings = performanceSettings;
+  
+  // Apply to Cesium
+  viewer.scene.skyAtmosphere.show = currentSettings.skyAtmosphere;
+  viewer.shadows = currentSettings.shadows;
+  viewer.shadowMap.enabled = currentSettings.shadows;
+  viewer.shadowMap.softShadows = currentSettings.shadows && currentSettings.softShadows;
+  
+  if (viewer.scene.postProcessStages.fxaa) {
+    viewer.scene.postProcessStages.fxaa.enabled = currentSettings.fxaa;
+  }
+  
+  viewer.scene.fog.enabled = currentSettings.fog;
+  viewer.resolutionScale = currentSettings.resolutionScale;
+  
+  // Set target FPS
+  switch(currentSettings.targetFPS) {
+    case 'UNLIMITED':
+      viewer.targetFrameRate = undefined;
+      break;
+    case '60':
+      viewer.targetFrameRate = 60;
+      break;
+    case '30':
+      viewer.targetFrameRate = 30;
+      break;
+  }
+  
+  // Apply building detail to tilesets
+  viewer.scene.primitives._primitives.forEach(primitive => {
+    if (primitive.isCesium3DTileset) {
+      switch(currentSettings.buildingDetail) {
+        case 'HIGH':
+          primitive.maximumScreenSpaceError = 1;
+          break;
+        case 'MEDIUM':
+          primitive.maximumScreenSpaceError = 4;
+          break;
+        case 'LOW':
+          primitive.maximumScreenSpaceError = 16;
+          break;
+      }
+    }
+  });
+  
+  // Update UI
+  updatePerformanceUI();
+  if (preset !== 'custom') {
+    updatePresetButtonStates(preset);
+  }
+  
+  if (preset !== 'custom') {
+    savePerformanceSettings();
+  }
+  
+  console.log('Applied preset:', preset, currentSettings);
+}
+
+function updatePresetButtonStates(activePreset) {
+  const presetButtons = ['presetUltra', 'presetBalanced', 'presetPerformance', 'presetPotato'];
+  const presetNames = ['ultra', 'balanced', 'performance', 'potato'];
+  
+  presetButtons.forEach((buttonId, index) => {
+    const button = document.getElementById(buttonId);
+    if (button) {
+      button.className = presetNames[index] === activePreset ? 'preset-btn active' : 'preset-btn';
+    }
+  });
+}
+
+// Update performance UI button states
+function updatePerformanceUI() {
+  // Update individual toggles
+  const skyBtn = document.getElementById('toggleSkyAtmosphere');
+  const shadowBtn = document.getElementById('toggleShadows');
+  const softShadowBtn = document.getElementById('toggleSoftShadows');
+  const fxaaBtn = document.getElementById('toggleFXAA');
+  const fogBtn = document.getElementById('toggleFog');
+  const buildingBtn = document.getElementById('toggleBuildingDetail');
+  const resBtn = document.getElementById('toggleResolution');
+  const fpsBtn = document.getElementById('toggleTargetFPS');
+  
+  if (skyBtn) skyBtn.className = performanceSettings.skyAtmosphere ? 'perf-toggle active' : 'perf-toggle';
+  if (shadowBtn) shadowBtn.className = performanceSettings.shadows ? 'perf-toggle active' : 'perf-toggle';
+  if (softShadowBtn) {
+    softShadowBtn.className = performanceSettings.softShadows ? 'perf-toggle active' : 'perf-toggle';
+    softShadowBtn.style.opacity = performanceSettings.shadows ? '1' : '0.5';
+  }
+  if (fxaaBtn) fxaaBtn.className = performanceSettings.fxaa ? 'perf-toggle active' : 'perf-toggle';
+  if (fogBtn) fogBtn.className = performanceSettings.fog ? 'perf-toggle active' : 'perf-toggle';
+  if (buildingBtn) buildingBtn.textContent = `🏢 ${performanceSettings.buildingDetail}`;
+  if (resBtn) resBtn.textContent = `📐 ${Math.round(performanceSettings.resolutionScale * 100)}%`;
+  if (fpsBtn) fpsBtn.textContent = `🎬 ${performanceSettings.targetFPS === 'UNLIMITED' ? '∞' : performanceSettings.targetFPS} FPS`;
+}
+
 // Update debug display
 function updateDebugDisplay() {
   const eyeHeightDisplay = document.getElementById('eyeHeightDisplay');
@@ -1608,8 +2280,14 @@ function updateDebugDisplay() {
 
 // Set up the game update loop
 let lastTime = null;
+let lastSaveTime = 0; // Track when we last saved to localStorage
+const SAVE_INTERVAL = 5000; // Save every 5 seconds (5000ms)
+
 viewer.clock.onTick.addEventListener(async (clock) => {
   const currentTime = performance.now() / 1000; // Use performance.now() for more reliable timing
+
+  // Update FPS counter
+  updateFPS();
 
   if (lastTime !== null) {
     const deltaTime = currentTime - lastTime;
@@ -1619,6 +2297,13 @@ viewer.clock.onTick.addEventListener(async (clock) => {
     
     if (clampedDeltaTime > 0) {
       await updateVehicleMovement(clampedDeltaTime);
+    }
+
+    // Save position to localStorage every 5 seconds
+    const currentTimeMs = performance.now();
+    if (currentTimeMs - lastSaveTime >= SAVE_INTERVAL) {
+      savePositionToStorage();
+      lastSaveTime = currentTimeMs;
     }
 
     // Update debug display
@@ -1639,6 +2324,24 @@ viewer.clock.onTick.addEventListener(async (clock) => {
       const lon = Cesium.Math.toDegrees(cartographic.longitude);
       const height = cartographic.height;
       positionDisplay.textContent = `Position: ${lat.toFixed(6)}, ${lon.toFixed(6)}, H: ${height.toFixed(1)}m`;
+    }
+    
+    // Update mobile input debug display
+    const mobileGasDisplay = document.getElementById('mobileGasDisplay');
+    const mobileBrakeDisplay = document.getElementById('mobileBrakeDisplay');
+    const mobileSteeringDisplay = document.getElementById('mobileSteeringDisplay');
+    
+    if (mobileGasDisplay) {
+      mobileGasDisplay.textContent = `Gas: ${mobileInput.gas}`;
+      mobileGasDisplay.style.color = mobileInput.gas ? '#00ff00' : 'rgba(255, 255, 255, 0.7)';
+    }
+    if (mobileBrakeDisplay) {
+      mobileBrakeDisplay.textContent = `Brake: ${mobileInput.brake}`;
+      mobileBrakeDisplay.style.color = mobileInput.brake ? '#ff0000' : 'rgba(255, 255, 255, 0.7)';
+    }
+    if (mobileSteeringDisplay) {
+      mobileSteeringDisplay.textContent = `Steering: ${mobileInput.steering.toFixed(2)}`;
+      mobileSteeringDisplay.style.color = Math.abs(mobileInput.steering) > 0.1 ? '#ffff00' : 'rgba(255, 255, 255, 0.7)';
     }
   }
 
