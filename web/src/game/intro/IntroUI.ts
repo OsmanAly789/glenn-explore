@@ -40,6 +40,18 @@ export class IntroUI {
           <div class="email-input-container">
             <input type="email" class="email-input" placeholder="Enter your email" value="${this.state.loginState.email}">
           </div>
+          
+          <div class="auth-divider">
+            <span>OR</span>
+          </div>
+          
+          <button class="anonymous-signin-btn">
+            🎭 Continue Anonymously
+          </button>
+          
+          <p class="anonymous-note">
+            No email required. Your progress will be saved on this device.
+          </p>
         </div>
       `;
     } else {
@@ -360,12 +372,42 @@ export class IntroUI {
     this.options.onStartGame([DEFAULT_COORDINATES.lng, DEFAULT_COORDINATES.lat]);
   }
 
+  private async handleAnonymousSignIn() {
+    if (!this.options || !this.state) return;
+
+    try {
+      this.state.loginState.isLoading = true;
+      this.renderIntroDialog();
+      this.addEventListeners();
+
+      const response = await this.options.onSignInAnonymously();
+      
+      if (response) {
+        this.state.loginState.isVerified = true;
+
+        if (!response.hasPaid) {
+          this.state.currentStep = 'payment';
+        } else {
+          this.state.currentStep = 'instructions';
+        }
+      }
+    } catch (error) {
+      console.error('Failed to sign in anonymously:', error);
+      window.alert('Failed to sign in anonymously. Please try again.');
+    } finally {
+      this.state.loginState.isLoading = false;
+      this.renderIntroDialog();
+      this.addEventListeners();
+    }
+  }
+
   private addLoginListeners() {
     if (!this.element || !this.state) return;
 
     const emailInput = this.element.querySelector('.email-input') as HTMLInputElement;
     const tryAgainButton = this.element.querySelector('.try-again-btn') as HTMLButtonElement;
     const otpInput = this.element.querySelector('.otp-input') as HTMLInputElement;
+    const anonymousBtn = this.element.querySelector('.anonymous-signin-btn') as HTMLButtonElement;
 
     if (emailInput) {
       emailInput.addEventListener('input', () => {
@@ -387,6 +429,12 @@ export class IntroUI {
         this.state.loginState.otpSent = false;
         this.renderIntroDialog();
         this.addEventListeners();
+      });
+    }
+
+    if (anonymousBtn) {
+      anonymousBtn.addEventListener('click', async () => {
+        await this.handleAnonymousSignIn();
       });
     }
   }
