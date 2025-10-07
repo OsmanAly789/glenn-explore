@@ -77,6 +77,35 @@ export class IntroController {
           return null;
         }
       },
+      onSignInAnonymously: async () => {
+        try {
+          const response = await this.authClient.signInAnonymously();
+
+          if (!response) {
+            window.alert('Failed to sign in anonymously. Please try again.');
+            return null;
+          }
+
+          // Update player store with data from login response
+          PlayerStore.setPlayerName(response.username);
+          PlayerStore.setIsGuest(response.isGuest);
+
+          // Store player ID for future sessions
+          localStorage.setItem(this.playerIdKey, response.playerId);
+
+          // If user hasn't paid, show payment UI
+          if (!response.hasPaid) {
+            return response;
+          }
+
+          // If user has paid, mark intro as viewed and proceed
+          this.markIntroAsViewed();
+          return response;
+        } catch (error) {
+          console.error('Failed to sign in anonymously:', error);
+          return null;
+        }
+      },
       onSetName: (name) => {
         if (this.onNameChange) {
           this.onNameChange(name);

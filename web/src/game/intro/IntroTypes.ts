@@ -12,6 +12,7 @@ export interface IntroOptions {
   onVehicleSelect: (vehicleType: 'car' | 'dinosaur') => void;
   onRequestOtp: (email: string) => Promise<RequestOtpResponse>;
   onVerifyOtp: (email: string, otpCode: string) => Promise<LoginResponse | null>;
+  onSignInAnonymously: () => Promise<LoginResponse | null>;
   onSetName: (name: string) => void;
   onInitiatePayment: () => Promise<{ success: boolean }>;
   isAuthenticated: boolean;

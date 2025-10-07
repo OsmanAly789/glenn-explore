@@ -92,46 +92,57 @@ export class AuthClient {
   }
 
   /**
-   * Create a guest user and get authentication cookie
-   * @deprecated Use email authentication instead
+   * Sign in anonymously with auto-generated or existing guest credentials
    */
-  // public async createGuestUser(guestId: string): Promise<LoginResponse> {
-  //   // Try to get existing guest key
-  //   const existingGuestKey = localStorage.getItem(this.GUEST_KEY_STORAGE);
+  public async signInAnonymously(): Promise<LoginResponse> {
+    // Check for existing guest credentials
+    let guestId = localStorage.getItem(this.GUEST_ID_STORAGE);
+    const existingGuestKey = localStorage.getItem(this.GUEST_KEY_STORAGE);
 
-  //   const request: CreateGuestRequest = { 
-  //     guestId,
-  //     guestKey: existingGuestKey || undefined
-  //   };
+    // Generate new GUID if no existing guest ID
+    if (!guestId) {
+      guestId = crypto.randomUUID();
+      localStorage.setItem(this.GUEST_ID_STORAGE, guestId);
+    }
 
-  //   const response = await fetch(`${this.baseUrl}/guest`, {
-  //     method: 'POST',
-  //     headers: {
-  //       'Content-Type': 'application/json',
-  //     },
-  //     body: JSON.stringify(request),
-  //     credentials: 'include', // Important: This is needed to include cookies
-  //   });
+    const request: CreateGuestRequest = { 
+      guestId,
+      guestKey: existingGuestKey || undefined
+    };
 
-  //   if (!response.ok) {
-  //     // If unauthorized and we had a key, clear it as it might be invalid
-  //     if (response.status === 401) {
-  //       localStorage.removeItem(this.GUEST_KEY_STORAGE);
-  //       localStorage.removeItem(this.GUEST_ID_STORAGE);
-  //       window.location.reload()
-  //     }
-  //     throw new Error(`Failed to create guest user: ${response.statusText}`);
-  //   }
+    const response = await fetch(`${this.baseUrl}/guest`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      credentials: 'include', // Important: This is needed to include cookies
+    });
 
-  //   const loginResponse: LoginResponse = await response.json();
+    if (!response.ok) {
+      // If unauthorized and we had a key, credentials are invalid
+      // Clear them and generate fresh ones
+      if (response.status === 401 && existingGuestKey) {
+        localStorage.removeItem(this.GUEST_KEY_STORAGE);
+        localStorage.removeItem(this.GUEST_ID_STORAGE);
+        // Retry with fresh credentials
+        return this.signInAnonymously();
+      }
+      throw new Error(`Failed to sign in anonymously: ${response.statusText}`);
+    }
 
-  //   // If we got a new guest key, save it
-  //   if (loginResponse.guestKey) {
-  //     localStorage.setItem(this.GUEST_KEY_STORAGE, loginResponse.guestKey);
-  //   }
+    const loginResponse: LoginResponse = await response.json();
 
-  //   return loginResponse;
-  // }
+    // Save the guest key if returned (first time only)
+    if (loginResponse.guestKey) {
+      localStorage.setItem(this.GUEST_KEY_STORAGE, loginResponse.guestKey);
+    }
+
+    PlayerStore.setPlayerName(loginResponse.username);
+    PlayerStore.setIsGuest(loginResponse.isGuest);
+    
+    return loginResponse;
+  }
 
   /**
    * Clear guest key from storage (useful for logout)
